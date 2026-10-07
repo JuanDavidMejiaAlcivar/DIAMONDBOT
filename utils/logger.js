@@ -2,6 +2,11 @@ const { EmbedBuilder } = require('discord.js');
 
 const LOG_CHANNEL_ID = '1551777782076543098';
 
+// Cache del canal de logs para evitar fetchs repetidos
+let logChannelCache = null;
+let lastCacheTime = 0;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
+
 // Colores para diferentes tipos de logs
 const COLORS = {
   COMMAND: 0x3498DB,        // Azul - Comandos generales
@@ -12,7 +17,8 @@ const COLORS = {
   ANTIRAID: 0xE67E22,       // Naranja oscuro - Antiraid
   WARN: 0xF1C40F,           // Amarillo - Advertencias
   SYSTEM: 0x95A5A6,         // Gris - Sistema
-  ERROR: 0xC0392B           // Rojo oscuro - Errores
+  ERROR: 0xC0392B,          // Rojo oscuro - Errores
+  TICKET: 0x5865F2          // Azul Discord - Tickets
 };
 
 // Emojis para diferentes acciones
@@ -47,15 +53,42 @@ const EMOJIS = {
 };
 
 /**
- * Envía un log al canal de logs
+ * Obtiene el canal de logs con caché
+ */
+async function getLogChannel(client) {
+  const now = Date.now();
+  
+  // Si el cache es válido, devolverlo
+  if (logChannelCache && (now - lastCacheTime) < CACHE_DURATION) {
+    return logChannelCache;
+  }
+  
+  // Fetch el canal y actualizar cache
+  try {
+    const channel = await client.channels.fetch(LOG_CHANNEL_ID);
+    if (channel && channel.isTextBased()) {
+      logChannelCache = channel;
+      lastCacheTime = now;
+      return channel;
+    }
+  } catch (error) {
+    console.error('[LOGGER] Error fetching canal de logs:', error.message);
+  }
+  
+  return null;
+}
+
+/**
+ * Envía un log al canal de logs (optimizado)
  * @param {Client} client - Cliente de Discord
  * @param {Object} logData - Datos del log
  */
 async function enviarLog(client, logData) {
   try {
-    const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-    if (!channel || !channel.isTextBased()) {
-      console.error('[LOGGER] No se pudo acceder al canal de logs');
+    const channel = await getLogChannel(client);
+    
+    if (!channel) {
+      console.error('[LOGGER] Canal de logs no disponible');
       return;
     }
 
@@ -385,9 +418,10 @@ async function logCategory(client, executor, action, categoryName, details = {})
 async function logSystem(client, executor, action, details = {}) {
   const actionData = {
     reset: { emoji: EMOJIS.RESET, text: 'Sistema Reseteado', color: COLORS.ERROR },
-    ticket_deploy: { emoji: EMOJIS.TICKET, text: 'Panel de Tickets Desplegado', color: COLORS.SYSTEM },
-    ticket_create: { emoji: EMOJIS.ADD, text: 'Ticket Creado', color: COLORS.SYSTEM },
-    ticket_close: { emoji: EMOJIS.DELETE, text: 'Ticket Cerrado', color: COLORS.SYSTEM }
+    ticket_deploy: { emoji: EMOJIS.TICKET, text: 'Panel de Tickets Desplegado', color: COLORS.TICKET },
+    ticket_create: { emoji: EMOJIS.ADD, text: 'Ticket Creado', color: COLORS.TICKET },
+    ticket_close: { emoji: EMOJIS.DELETE, text: 'Ticket Cerrado', color: COLORS.TICKET },
+    ticket_claim: { emoji: EMOJIS.SUCCESS, text: 'Ticket Reclamado', color: COLORS.TICKET }
   };
 
   const data = actionData[action] || { emoji: '⚙️', text: 'Acción de Sistema', color: COLORS.SYSTEM };
@@ -401,7 +435,7 @@ async function logSystem(client, executor, action, details = {}) {
     fields.push({ name: '📍 Canal', value: `<#${details.channel}>`, inline: true });
   }
   if (details.stats) {
-    fields.push({ name: '📊 Estadísticas', value: details.stats, inline: false });
+    fields.push({ name: '📊 Detalles', value: details.stats, inline: false });
   }
   if (details.user) {
     fields.push({ name: '👤 Usuario', value: `<@${details.user}>`, inline: true });

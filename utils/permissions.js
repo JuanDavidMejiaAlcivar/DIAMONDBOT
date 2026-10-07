@@ -5,12 +5,12 @@
 
 // IDs de roles administrativos autorizados
 const ADMIN_ROLE_IDS = [
-  '1293931224217288805',
-  '1549907589960302623',
-  '1361168022668054691',
-  '1369009698891763874',
-  '1305269515109535867',
-  '1557346515142443090'
+  '1293931224217288805', // Fundadora・
+  '1549907589960302623', // Fundador・
+  '1361168022668054691', // Owners・
+  '1369009698891763874', // Admin Pub・
+  '1305269515109535867'  // Staff・
+  // Removido: 1557346515142443090 (rol no existe en el servidor)
 ];
 
 // IDs de canales permitidos para comandos específicos

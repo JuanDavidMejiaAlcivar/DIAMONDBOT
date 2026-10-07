@@ -3,6 +3,17 @@ const path = require('node:path');
 const { PermissionFlagsBits, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 const COUNTER_PATH = path.join(__dirname, '..', 'data', 'ticket-counter.json');
+const TICKET_CATEGORY_ID = '1310785348179202158'; // Categoría OBLIGATORIA para tickets
+const MAIN_GUILD_ID = '1292979234888876042'; // Servidor principal
+
+// Importar logger para logs
+let logger;
+try {
+  logger = require('./logger');
+} catch (err) {
+  console.error('[TICKET] No se pudo cargar el módulo de logger:', err);
+  logger = null;
+}
 
 // Leer el contador actual
 function getCounter() {
@@ -68,38 +79,89 @@ async function crearTicket(guild, member, ticketType) {
   const config = TICKET_TYPES[ticketType];
   if (!config) throw new Error('Tipo de ticket inválido');
 
+  // VERIFICAR QUE ESTAMOS EN EL SERVIDOR PRINCIPAL
+  if (guild.id !== MAIN_GUILD_ID) {
+    throw new Error(`Los tickets solo están disponibles en el servidor principal de Diamonds League.`);
+  }
+
+  // VERIFICAR QUE LA CATEGORÍA EXISTE
+  let category = null;
+  try {
+    category = await guild.channels.fetch(TICKET_CATEGORY_ID);
+    console.log('[TICKET] Categoría encontrada:', category?.name, 'Tipo:', category?.type);
+  } catch (error) {
+    console.error('[TICKET] Error al buscar categoría:', error);
+    throw new Error(`No se pudo encontrar la categoría de tickets (ID: ${TICKET_CATEGORY_ID}). Contacta con un administrador.`);
+  }
+
+  // Verificar que es una categoría (tipo 4 en Discord)
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    console.error('[TICKET] Tipo de canal inválido:', category?.type, 'Esperado:', ChannelType.GuildCategory);
+    throw new Error(`La categoría de tickets no está configurada correctamente. Contacta con un administrador.`);
+  }
+
+  console.log('[TICKET] Verificación exitosa - Servidor:', guild.name, '- Categoría:', category.name);
+
   const ticketNumber = incrementCounter();
   const ticketName = `ticket-${ticketNumber}`;
 
-  // Crear el canal
-  const channel = await guild.channels.create({
-    name: ticketName,
-    type: ChannelType.GuildText,
-    permissionOverwrites: [
-      {
-        id: guild.roles.everyone.id,
-        deny: [PermissionFlagsBits.ViewChannel]
-      },
-      {
-        id: member.id,
+  // Obtener roles de admin para permisos y menciones
+  const { ADMIN_ROLE_IDS } = require('./permissions');
+
+  // Crear permisos base
+  const permissionOverwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+    },
+    {
+      id: member.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles,
+        PermissionFlagsBits.EmbedLinks
+      ]
+    },
+    {
+      id: guild.members.me.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageMessages
+      ]
+    }
+  ];
+
+  // Agregar permisos para cada rol administrativo (solo si existe en el servidor)
+  for (const roleId of ADMIN_ROLE_IDS) {
+    // Verificar que el rol existe en el servidor
+    const roleExists = guild.roles.cache.has(roleId);
+    if (roleExists) {
+      permissionOverwrites.push({
+        id: roleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ReadMessageHistory,
           PermissionFlagsBits.AttachFiles,
-          PermissionFlagsBits.EmbedLinks
-        ]
-      },
-      {
-        id: guild.members.me.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.EmbedLinks,
           PermissionFlagsBits.ManageMessages
         ]
-      }
-    ],
+      });
+    } else {
+      console.warn(`[TICKET] Rol administrativo ${roleId} no encontrado en el servidor, se omitirá`);
+    }
+  }
+
+  // Crear el canal EN LA CATEGORÍA ESPECÍFICA
+  const channel = await guild.channels.create({
+    name: ticketName,
+    type: ChannelType.GuildText,
+    parent: TICKET_CATEGORY_ID,
+    permissionOverwrites,
     reason: `Ticket #${ticketNumber} creado por ${member.user.tag}`
   });
 
@@ -122,7 +184,7 @@ async function crearTicket(guild, member, ticketType) {
     .setFooter({ text: 'Diamonds League • Sistema de Tickets' })
     .setTimestamp();
 
-  // Botones
+  // Botones - Solo reclamar y cerrar
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`ticket_claim_${ticketNumber}`)
@@ -130,17 +192,37 @@ async function crearTicket(guild, member, ticketType) {
       .setEmoji('✋')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`ticket_close_${ticketNumber}`)
+      .setCustomId(`ticket_close_${ticketNumber}_${member.id}`)
       .setLabel('Cerrar Ticket')
       .setEmoji('🔒')
       .setStyle(ButtonStyle.Danger)
   );
 
+  // Obtener menciones de roles de admin (solo los que existen en el servidor)
+  const adminMentions = ADMIN_ROLE_IDS
+    .filter(roleId => guild.roles.cache.has(roleId))
+    .map(roleId => `<@&${roleId}>`)
+    .join(' ');
+
   await channel.send({
-    content: `<@${member.id}>`,
+    content: `<@${member.id}> ${adminMentions}\n\n> **Nuevo ticket creado** - Un miembro del staff atenderá pronto.`,
     embeds: [welcomeEmbed],
     components: [row]
   });
+
+  // Log de ticket creado
+  if (logger) {
+    logger.logSystem(
+      guild.client,
+      member.user,
+      'ticket_create',
+      {
+        description: `Ticket #${ticketNumber} creado`,
+        channel: channel.id,
+        stats: `Tipo: ${config.name}`
+      }
+    ).catch(err => console.error('[TICKET] Error en log:', err));
+  }
 
   return { channel, ticketNumber };
 }
@@ -158,6 +240,20 @@ async function reclamarTicket(interaction, ticketNumber) {
 
   await interaction.channel.send({ embeds: [claimEmbed] });
 
+  // Log de ticket reclamado
+  if (logger) {
+    logger.logSystem(
+      interaction.client,
+      interaction.user,
+      'ticket_claim',
+      {
+        description: `Ticket #${ticketNumber} reclamado`,
+        channel: interaction.channel.id,
+        user: interaction.user.id
+      }
+    ).catch(err => console.error('[TICKET] Error en log:', err));
+  }
+
   // Actualizar permisos para que el reclamante pueda ver
   try {
     await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
@@ -172,60 +268,91 @@ async function reclamarTicket(interaction, ticketNumber) {
   return true;
 }
 
-// Cerrar un ticket
-async function cerrarTicket(interaction, ticketNumber, closer) {
-  // Mensaje de confirmación
-  const confirmEmbed = new EmbedBuilder()
-    .setColor(0xFEE75C)
-    .setTitle('⚠️ Confirmar Cierre de Ticket')
-    .setDescription(
-      '¿Estás seguro de que deseas cerrar este ticket?\n\n' +
-      '**Esta acción no se puede deshacer.**\n' +
-      'El canal será eliminado en **5 segundos** después de confirmar.'
-    )
-    .setTimestamp();
+// Cerrar ticket y enviar DM
+async function cerrarTicketConRazon(channel, closer, reason, creatorId, guild) {
+  console.log('[TICKET-CLOSE] Iniciando cierre de ticket');
+  console.log('[TICKET-CLOSE] Creator ID recibido:', creatorId);
+  console.log('[TICKET-CLOSE] Closer:', closer.tag);
+  console.log('[TICKET-CLOSE] Razón:', reason);
+  
+  try {
+    // Buscar al creador del ticket
+    console.log('[TICKET-CLOSE] Intentando buscar al creador...');
+    const creator = await guild.members.fetch(creatorId).catch(err => {
+      console.error('[TICKET-CLOSE] Error al buscar creador:', err.message);
+      return null;
+    });
+    
+    if (!creator) {
+      console.error('[TICKET-CLOSE] No se pudo encontrar al creador del ticket');
+    } else {
+      console.log('[TICKET-CLOSE] Creador encontrado:', creator.user.tag);
+      
+      // Embed para el DM
+      const dmEmbed = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setTitle('🔒 Tu Ticket Ha Sido Cerrado')
+        .setDescription(
+          `Tu ticket **${channel.name}** ha sido cerrado.\n\n` +
+          `**Cerrado por:** <@${closer.id}> (${closer.tag})\n` +
+          `**Razón:** ${reason}\n\n` +
+          `Si necesitas más ayuda, puedes abrir otro ticket.`
+        )
+        .setFooter({ text: 'Diamonds League • Sistema de Tickets' })
+        .setTimestamp();
 
-  const confirmRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`ticket_confirm_close_${ticketNumber}`)
-      .setLabel('Sí, cerrar')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(`ticket_cancel_close_${ticketNumber}`)
-      .setLabel('No, cancelar')
-      .setStyle(ButtonStyle.Secondary)
-  );
-
-  return interaction.reply({
-    embeds: [confirmEmbed],
-    components: [confirmRow],
-    ephemeral: true
-  });
-}
-
-// Confirmar cierre de ticket
-async function confirmarCierreTicket(channel, closer) {
-  const closeEmbed = new EmbedBuilder()
-    .setColor(0xED4245)
-    .setTitle('🔒 Ticket Cerrado')
-    .setDescription(
-      `Este ticket ha sido cerrado por <@${closer.id}>.\n\n` +
-      `**El canal se eliminará en 5 segundos...**`
-    )
-    .setTimestamp();
-
-  await channel.send({ embeds: [closeEmbed] });
-
-  setTimeout(async () => {
-    try {
-      await channel.delete(`Ticket cerrado por ${closer.tag}`);
-      console.log(`[TICKET] Canal ${channel.name} eliminado correctamente`);
-    } catch (error) {
-      console.error('[TICKET] Error eliminando canal:', error);
+      try {
+        console.log('[TICKET-CLOSE] Intentando enviar DM...');
+        await creator.send({ embeds: [dmEmbed] });
+        console.log(`[TICKET-CLOSE] ✅ DM enviado exitosamente a ${creator.user.tag}`);
+      } catch (error) {
+        console.error('[TICKET-CLOSE] ❌ No se pudo enviar DM:', error.message);
+        console.error('[TICKET-CLOSE] Posible causa: Usuario tiene DMs deshabilitados o bloqueó al bot');
+      }
     }
-  }, 5000);
 
-  return true;
+    // Mensaje de cierre en el canal
+    const closeEmbed = new EmbedBuilder()
+      .setColor(0xED4245)
+      .setTitle('🔒 Ticket Cerrado')
+      .setDescription(
+        `**Cerrado por:** <@${closer.id}>\n` +
+        `**Razón:** ${reason}\n\n` +
+        `**El canal se eliminará en 5 segundos...**`
+      )
+      .setTimestamp();
+
+    await channel.send({ embeds: [closeEmbed] });
+
+    // Log de ticket cerrado
+    if (logger) {
+      logger.logSystem(
+        guild.client,
+        closer,
+        'ticket_close',
+        {
+          description: `Ticket ${channel.name} cerrado`,
+          channel: channel.id,
+          stats: `Razón: ${reason}\nCreador: <@${creatorId}>`
+        }
+      ).catch(err => console.error('[TICKET] Error en log:', err));
+    }
+
+    // Eliminar el canal después de 5 segundos
+    setTimeout(async () => {
+      try {
+        await channel.delete(`Ticket cerrado por ${closer.tag} - Razón: ${reason}`);
+        console.log(`[TICKET] Canal ${channel.name} eliminado correctamente`);
+      } catch (error) {
+        console.error('[TICKET] Error eliminando canal:', error);
+      }
+    }, 5000);
+
+    return true;
+  } catch (error) {
+    console.error('[TICKET] Error en cerrarTicketConRazon:', error);
+    throw error;
+  }
 }
 
 module.exports = {
@@ -234,6 +361,5 @@ module.exports = {
   TICKET_TYPES,
   crearTicket,
   reclamarTicket,
-  cerrarTicket,
-  confirmarCierreTicket
+  cerrarTicketConRazon
 };

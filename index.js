@@ -11,6 +11,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  PermissionFlagsBits,
 } = require('discord.js');
 const fs   = require('node:fs');
 const path = require('node:path');
@@ -19,7 +20,7 @@ const { pendingEdits } = require('./utils/state');
 const { crearEquipoCompleto, hexAInt } = require('./utils/teamService');
 const { deleteTeamEmoji, getTeamEmoji } = require('./utils/emojiService');
 const logger = require('./utils/logger');
-const { crearTicket, reclamarTicket, cerrarTicket, confirmarCierreTicket } = require('./utils/ticketSystem');
+const { crearTicket, reclamarTicket, cerrarTicketConRazon } = require('./utils/ticketSystem');
 
 const DT_ROLE_ID       = process.env.DT_ROLE_ID ? process.env.DT_ROLE_ID.trim() : null;
 const SUBDT_ROLE_ID    = process.env.SUBDT_ROLE_ID ? process.env.SUBDT_ROLE_ID.trim() : null;
@@ -90,6 +91,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // Crear ticket
       if (id.startsWith('ticket_') && !id.includes('claim') && !id.includes('close') && !id.includes('confirm') && !id.includes('cancel')) {
+        console.log('[TICKET] Intentando crear ticket, tipo:', id);
         const ticketType = id.replace('ticket_', '');
         
         // Verificar si el usuario ya tiene un ticket abierto
@@ -99,21 +101,25 @@ client.on('interactionCreate', async (interaction) => {
         );
 
         if (existingTicket) {
+          console.log('[TICKET] Usuario ya tiene ticket abierto');
           return interaction.reply({
             content: `❌ Ya tienes un ticket abierto: <#${existingTicket.id}>\n> Por favor, ciérralo antes de abrir otro.`,
-            ephemeral: true
+            flags: 64 // ephemeral
           });
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        console.log('[TICKET] Deferring reply...');
+        await interaction.deferReply({ flags: 64 }); // 64 = ephemeral
 
         try {
+          console.log('[TICKET] Llamando a crearTicket...');
           const { channel, ticketNumber } = await crearTicket(
             interaction.guild,
             interaction.member,
             ticketType
           );
 
+          console.log('[TICKET] Ticket creado, editando reply...');
           await interaction.editReply({
             content: `✅ Ticket creado exitosamente: <#${channel.id}>\n> Ticket #${ticketNumber}`
           });
@@ -122,7 +128,7 @@ client.on('interactionCreate', async (interaction) => {
         } catch (error) {
           console.error('[TICKET] Error creando ticket:', error);
           await interaction.editReply({
-            content: '❌ Error al crear el ticket. Por favor, contacta con un administrador.'
+            content: `❌ Error al crear el ticket: ${error.message}\n> Por favor, contacta con un administrador.`
           });
         }
         return;
@@ -130,23 +136,35 @@ client.on('interactionCreate', async (interaction) => {
 
       // Reclamar ticket
       if (id.startsWith('ticket_claim_')) {
+        console.log('[TICKET] Intentando reclamar ticket');
         const ticketNumber = id.replace('ticket_claim_', '');
         
         // Verificar que sea admin/staff
         const { isAdmin } = require('./utils/permissions');
         if (!isAdmin(interaction.member)) {
+          console.log('[TICKET] Usuario no es admin');
           return interaction.reply({
             content: '❌ Solo los administradores pueden reclamar tickets.',
-            ephemeral: true
+            flags: 64 // ephemeral
           });
         }
 
+        console.log('[TICKET] Admin verificado, deferring update...');
         await interaction.deferUpdate();
 
         try {
+          console.log('[TICKET] Llamando a reclamarTicket...');
           await reclamarTicket(interaction, ticketNumber);
           
-          // Deshabilitar el botón de reclamar
+          // Extraer el creatorId del botón de cerrar original
+          const originalCloseButton = interaction.message.components[0]?.components?.find(
+            btn => btn.customId?.startsWith('ticket_close_')
+          );
+          const originalCreatorId = originalCloseButton?.customId?.split('_')[3];
+          
+          console.log('[TICKET] Creator ID extraído del botón original:', originalCreatorId);
+          
+          // Deshabilitar el botón de reclamar pero MANTENER el creatorId en el botón de cerrar
           const disabledRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId(`ticket_claim_${ticketNumber}`)
@@ -155,7 +173,7 @@ client.on('interactionCreate', async (interaction) => {
               .setStyle(ButtonStyle.Success)
               .setDisabled(true),
             new ButtonBuilder()
-              .setCustomId(`ticket_close_${ticketNumber}`)
+              .setCustomId(`ticket_close_${ticketNumber}_${originalCreatorId}`)
               .setLabel('Cerrar Ticket')
               .setEmoji('🔒')
               .setStyle(ButtonStyle.Danger)
@@ -170,60 +188,55 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // Cerrar ticket (mostrar confirmación)
+      // Cerrar ticket (mostrar modal para la razón)
       if (id.startsWith('ticket_close_') && !id.includes('confirm') && !id.includes('cancel')) {
-        const ticketNumber = id.replace('ticket_close_', '');
+        console.log('[TICKET] Intentando cerrar ticket');
+        const parts = id.split('_');
+        const ticketNumber = parts[2];
+        const creatorId = parts[3];
         
         // Verificar que sea el creador o admin
         const { isAdmin } = require('./utils/permissions');
-        const isCreator = interaction.channel.permissionOverwrites.cache
-          .find(overwrite => overwrite.id === interaction.user.id && overwrite.allow.has(PermissionFlagsBits.SendMessages));
+        const isCreator = interaction.user.id === creatorId;
+        
+        console.log('[TICKET] Es admin?', isAdmin(interaction.member), 'Es creador?', isCreator);
         
         if (!isAdmin(interaction.member) && !isCreator) {
+          console.log('[TICKET] Usuario no autorizado para cerrar');
           return interaction.reply({
             content: '❌ Solo el creador del ticket o un administrador pueden cerrarlo.',
-            ephemeral: true
+            flags: 64 // ephemeral
           });
         }
 
+        // Crear modal para la razón
+        const modal = new ModalBuilder()
+          .setCustomId(`ticket_close_modal_${ticketNumber}_${creatorId}`)
+          .setTitle('Cerrar Ticket');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('close_reason')
+          .setLabel('Razón del cierre')
+          .setPlaceholder('Describe brevemente por qué se cierra este ticket...')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMinLength(10)
+          .setMaxLength(500);
+
+        const row = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(row);
+
         try {
-          await cerrarTicket(interaction, ticketNumber, interaction.user);
+          console.log('[TICKET] Mostrando modal de cierre...');
+          await interaction.showModal(modal);
         } catch (error) {
-          console.error('[TICKET] Error mostrando confirmación:', error);
+          console.error('[TICKET] Error mostrando modal:', error);
           await interaction.reply({
             content: '❌ Error al procesar la solicitud de cierre.',
-            ephemeral: true
-          });
+            flags: 64 // ephemeral
+          }).catch(() => {});
         }
         return;
-      }
-
-      // Confirmar cierre de ticket
-      if (id.startsWith('ticket_confirm_close_')) {
-        const ticketNumber = id.replace('ticket_confirm_close_', '');
-        
-        await interaction.update({
-          content: '🔒 Cerrando ticket...',
-          embeds: [],
-          components: []
-        });
-
-        try {
-          await confirmarCierreTicket(interaction.channel, interaction.user);
-          console.log(`[TICKET] Ticket #${ticketNumber} cerrado por ${interaction.user.tag}`);
-        } catch (error) {
-          console.error('[TICKET] Error cerrando ticket:', error);
-        }
-        return;
-      }
-
-      // Cancelar cierre de ticket
-      if (id.startsWith('ticket_cancel_close_')) {
-        return interaction.update({
-          content: '✅ Cierre cancelado. El ticket permanece abierto.',
-          embeds: [],
-          components: []
-        });
       }
 
       // ═══════════════════════════════════════════════════════════════════
@@ -958,6 +971,48 @@ client.on('interactionCreate', async (interaction) => {
 
   if (interaction.isModalSubmit()) {
     const id = interaction.customId;
+
+    // Handler para modal de cierre de ticket
+    if (id.startsWith('ticket_close_modal_')) {
+      console.log('[TICKET] ========================================');
+      console.log('[TICKET] Procesando modal de cierre');
+      console.log('[TICKET] ID completo del modal:', id);
+      
+      const parts = id.split('_');
+      console.log('[TICKET] Partes del ID:', parts);
+      
+      const ticketNumber = parts[3];
+      const creatorId = parts[4];
+      const reason = interaction.fields.getTextInputValue('close_reason');
+
+      console.log('[TICKET] Ticket Number:', ticketNumber);
+      console.log('[TICKET] Creator ID extraído:', creatorId);
+      console.log('[TICKET] Razón:', reason);
+      console.log('[TICKET] Usuario que cierra:', interaction.user.tag);
+      console.log('[TICKET] Guild:', interaction.guild.name);
+      console.log('[TICKET] ========================================');
+
+      await interaction.deferUpdate();
+
+      try {
+        console.log('[TICKET] Llamando a cerrarTicketConRazon...');
+        await cerrarTicketConRazon(
+          interaction.channel,
+          interaction.user,
+          reason,
+          creatorId,
+          interaction.guild
+        );
+        console.log(`[TICKET] ✅ Ticket #${ticketNumber} cerrado exitosamente por ${interaction.user.tag}`);
+      } catch (error) {
+        console.error('[TICKET] ❌ Error cerrando ticket:', error);
+        await interaction.followUp({
+          content: '❌ Error al cerrar el ticket. Por favor, contacta con un administrador.',
+          flags: 64 // ephemeral
+        }).catch(() => {});
+      }
+      return;
+    }
 
     if (id.startsWith('apprejm|')) {
       const solicitudId = id.replace('apprejm|', '');
