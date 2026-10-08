@@ -67,6 +67,7 @@ const CATEGORIES = {
     adminOnly: true,
     commands: [
       { name: '/add-equipo', description: 'Registra un nuevo equipo directamente' },
+      { name: '/asignar-categoria-equipos', description: 'Asigna categoría de canal para equipos de una división' },
       { name: '/edit-categorias', description: 'Gestiona las categorías de la liga' },
       { name: '/edit-equipo', description: 'Edita la información de un equipo' },
       { name: '/eliminate-equipo', description: 'Elimina permanentemente un equipo' },

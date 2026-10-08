@@ -58,14 +58,24 @@ async function crearEquipoCompleto(guild, datos, botUserId) {
     { id: botUserId, allow: ['ViewChannel', 'SendMessages', 'ManageChannels'] },
   ];
 
+  // Obtener la categoría de canal asignada a esta división
+  const categoria = db.obtenerCategoriaPorId(datos.categoria_id);
+  const parentCategoryId = categoria?.category_channel_id || null;
+
   try {
-    recursos.canal = await guild.channels.create({
+    const channelData = {
       name: nombreACanal(datos.nombre),
       type: ChannelType.GuildText,
-      parent: '1556982308081246258',
       reason: `Canal del equipo: ${datos.nombre}`,
       permissionOverwrites: overwrites,
-    });
+    };
+
+    // Solo agregar parent si hay una categoría asignada
+    if (parentCategoryId) {
+      channelData.parent = parentCategoryId;
+    }
+
+    recursos.canal = await guild.channels.create(channelData);
     db.actualizarEquipo(recursos.equipo.id, { channel_id: recursos.canal.id });
   } catch (err) {
     await rollback(guild, recursos);
