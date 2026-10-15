@@ -3,6 +3,9 @@ const path = require('node:path');
 
 const ANTIRAID_STATE_PATH = path.join(__dirname, '..', 'data', 'antiraid-state.json');
 
+// ── Cache en memoria para evitar leer del disco en cada mensaje ──────────
+let _cachedActive = null; // null = no cacheado, boolean = valor cacheado
+
 /**
  * Lee el estado actual del antiraid
  */
@@ -17,16 +20,26 @@ function leerEstadoAntiraid() {
       affected_channels: []
     };
     fs.writeFileSync(ANTIRAID_STATE_PATH, JSON.stringify(inicial, null, 2), 'utf-8');
+    _cachedActive = false;
     return inicial;
   }
-  return JSON.parse(fs.readFileSync(ANTIRAID_STATE_PATH, 'utf-8'));
+  try {
+    const estado = JSON.parse(fs.readFileSync(ANTIRAID_STATE_PATH, 'utf-8'));
+    _cachedActive = estado.active === true;
+    return estado;
+  } catch (err) {
+    console.error('[ANTIRAID] Error leyendo estado:', err.message);
+    _cachedActive = false;
+    return { active: false };
+  }
 }
 
 /**
- * Guarda el estado del antiraid
+ * Guarda el estado del antiraid y actualiza la cache
  */
 function guardarEstadoAntiraid(estado) {
   fs.writeFileSync(ANTIRAID_STATE_PATH, JSON.stringify(estado, null, 2), 'utf-8');
+  _cachedActive = estado.active === true;
 }
 
 /**
@@ -57,9 +70,12 @@ function desactivarAntiraid() {
 }
 
 /**
- * Verifica si el antiraid está activo
+ * Verifica si el antiraid está activo (usa cache en memoria).
+ * Se llama en cada mensaje, así que es crítico que sea rápido.
  */
 function estaActivo() {
+  if (_cachedActive !== null) return _cachedActive;
+  // Primera llamada: leer del disco y cachear
   const estado = leerEstadoAntiraid();
   return estado.active === true;
 }

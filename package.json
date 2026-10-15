@@ -8,10 +8,14 @@
     "deploy": "node deploy-commands.js",
     "dev": "node --watch index.js"
   },
-  "keywords": ["discord", "bot"],
+  "keywords": [
+    "discord",
+    "bot"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
   }

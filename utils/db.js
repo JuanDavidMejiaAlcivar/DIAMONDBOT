@@ -1,167 +1,70 @@
+/**
+ * Capa de datos principal de DiamondsBOT.
+ *
+ * - Categorías y equipos: siguen en `data/categorias.json` (estructura estable).
+ * - Plantillas, propuestas, fichados, bajas: migrados a SQLite (database.js).
+ *
+ * La API pública se mantiene idéntica para no romper los comandos existentes.
+ */
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const sqlite = require('./database');
 
 const DATA_PATH = path.join(__dirname, '..', 'data', 'categorias.json');
 const SOL_PATH  = path.join(__dirname, '..', 'data', 'solicitudes.json');
-const FICHAJES_PATH = path.join(__dirname, '..', 'data', 'fichajes.json');
 
-function plantillaVacia() {
-  return { plantillas: [], propuestas: [], fichados: [], bajas: [] };
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// Helpers internos
+// ═══════════════════════════════════════════════════════════════════════════
 
 function mismoId(a, b) {
   return String(a || '') === String(b || '');
 }
 
-function construirPlantillaDesdeEquipo(equipo) {
-  const ahora = new Date().toISOString();
-  const miembros = [];
-  const agregar = (userId, role, extra = {}) => {
-    if (!userId || miembros.some((m) => mismoId(m.discord_user_id, userId))) return;
-    const previo = (equipo.members || []).find((m) => mismoId(m.discord_user_id, userId));
-    miembros.push({
-      discord_user_id: String(userId),
-      role,
-      haxball_nick: extra.haxball_nick ?? previo?.haxball_nick ?? null,
-      joined_at: extra.joined_at || previo?.joined_at || ahora,
-    });
-  };
-
-  agregar(equipo.director_tecnico_id, 'DT');
-  agregar(equipo.sub_director_tecnico_id, 'SUB_DT');
-  for (const id of equipo.jugadores || []) agregar(id, 'PLAYER');
-  for (const m of equipo.members || []) agregar(m.discord_user_id, m.role || 'PLAYER', m);
-
-  return { team_id: equipo.id, nombre: equipo.nombre, miembros };
-}
-
-function aplicarPlantillaAlEquipo(equipo, plantilla) {
-  const miembros = plantilla?.miembros || [];
-  equipo.director_tecnico_id = miembros.find((m) => m.role === 'DT')?.discord_user_id || null;
-  equipo.sub_director_tecnico_id = miembros.find((m) => m.role === 'SUB_DT')?.discord_user_id || null;
-  equipo.jugadores = miembros.filter((m) => m.role === 'PLAYER').map((m) => m.discord_user_id);
-  equipo.members = miembros.map((m) => ({
-    team_id: plantilla.team_id,
-    discord_user_id: m.discord_user_id,
-    role: m.role,
-    haxball_nick: m.haxball_nick || null,
-    joined_at: m.joined_at || null,
-  }));
-  return equipo;
-}
-
-function sincronizarEquipoDesdePlantilla(teamId) {
-  const datos = leerDatos();
-  const equipo = datos.equipos.find((e) => e.id === teamId);
-  const plantilla = leerFichajes().plantillas.find((p) => p.team_id === teamId);
-  if (!equipo || !plantilla) return;
-  aplicarPlantillaAlEquipo(equipo, plantilla);
-  guardarDatos(datos);
-}
-
-function leerFichajes() {
-  if (!fs.existsSync(FICHAJES_PATH)) {
-    fs.writeFileSync(FICHAJES_PATH, JSON.stringify(plantillaVacia(), null, 2), 'utf-8');
-  }
-  const raw = JSON.parse(fs.readFileSync(FICHAJES_PATH, 'utf-8'));
-  const datos = {
-    plantillas: Array.isArray(raw.plantillas) ? raw.plantillas : [],
-    propuestas: Array.isArray(raw.propuestas) ? raw.propuestas : [],
-    fichados: Array.isArray(raw.fichados) ? raw.fichados : [],
-    bajas: Array.isArray(raw.bajas) ? raw.bajas : [],
-  };
-
-  let cambio = false;
-  const categorias = leerDatos();
-  for (const equipo of categorias.equipos) {
-    const idx = datos.plantillas.findIndex((p) => p.team_id === equipo.id);
-    if (idx === -1) {
-      datos.plantillas.push(construirPlantillaDesdeEquipo(equipo));
-      cambio = true;
-    } else if (datos.plantillas[idx].nombre !== equipo.nombre) {
-      datos.plantillas[idx].nombre = equipo.nombre;
-      cambio = true;
-    }
-  }
-  if (datos.fichados.length === 0 && datos.bajas.length === 0) {
-    for (const h of categorias.transferHistory || []) {
-      if (h.action === 'SIGNED') {
-        datos.fichados.push({
-          user_id: h.user_id,
-          team_id: h.to_team_id,
-          team_nombre: datos.plantillas.find((p) => p.team_id === h.to_team_id)?.nombre || null,
-          role: 'PLAYER',
-          haxball_nick: h.haxball_nick || null,
-          performed_by: h.performed_by,
-          timestamp: h.timestamp,
-        });
-        cambio = true;
-      } else if (['RELEASED', 'RESIGNED', 'LEFT_SERVER'].includes(h.action)) {
-        datos.bajas.push({
-          user_id: h.user_id,
-          team_id: h.from_team_id,
-          team_nombre: datos.plantillas.find((p) => p.team_id === h.from_team_id)?.nombre || null,
-          role: 'PLAYER',
-          motivo: h.action,
-          haxball_nick: h.haxball_nick || null,
-          performed_by: h.performed_by,
-          timestamp: h.timestamp,
-        });
-        cambio = true;
-      }
-    }
-  }
-  if (cambio) {
-    guardarFichajes(datos);
-    for (const plantilla of datos.plantillas) {
-      const equipo = categorias.equipos.find((e) => e.id === plantilla.team_id);
-      if (equipo) aplicarPlantillaAlEquipo(equipo, plantilla);
-    }
-    guardarDatos(categorias);
-  }
-  return datos;
-}
-
-function guardarFichajes(datos) {
-  fs.writeFileSync(FICHAJES_PATH, JSON.stringify(datos, null, 2), 'utf-8');
-}
-
-function obtenerPlantilla(teamId) {
-  return leerFichajes().plantillas.find((p) => p.team_id === teamId) || null;
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON – Categorías / Equipos (se mantiene en archivo)
+// ═══════════════════════════════════════════════════════════════════════════
 
 function leerDatos() {
-  return JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8'));
+  try {
+    if (!fs.existsSync(DATA_PATH)) {
+      const inicial = { categorias: [], equipos: [], transferHistory: [] };
+      fs.writeFileSync(DATA_PATH, JSON.stringify(inicial, null, 2), 'utf-8');
+      return inicial;
+    }
+    return JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8'));
+  } catch (err) {
+    console.error('[DB] Error leyendo categorias.json:', err.message);
+    return { categorias: [], equipos: [], transferHistory: [] };
+  }
 }
 
 function guardarDatos(datos) {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(datos, null, 2), 'utf-8');
-}
-
-function leerSolicitudes() {
-  if (!fs.existsSync(SOL_PATH)) {
-    const inicial = { solicitudes: [] };
-    fs.writeFileSync(SOL_PATH, JSON.stringify(inicial, null, 2), 'utf-8');
-    return inicial;
+  try {
+    fs.writeFileSync(DATA_PATH, JSON.stringify(datos, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[DB] Error guardando categorias.json:', err.message);
+    throw err;
   }
-  return JSON.parse(fs.readFileSync(SOL_PATH, 'utf-8'));
 }
 
-function guardarSolicitudes(datos) {
-  fs.writeFileSync(SOL_PATH, JSON.stringify(datos, null, 2), 'utf-8');
-}
+// ── Categorías ─────────────────────────────────────────────────────────────
 
 function obtenerCategorias() {
-  return leerDatos().categorias;
+  return leerDatos().categorias || [];
 }
 
 function obtenerCategoriaPorId(id) {
-  return leerDatos().categorias.find((c) => c.id === id) || null;
+  return leerDatos().categorias.find(c => c.id === id) || null;
 }
 
 function obtenerCategoriaPorNombre(nombre) {
-  return leerDatos().categorias.find((c) => c.nombre.toLowerCase() === nombre.toLowerCase()) || null;
+  if (!nombre) return null;
+  return leerDatos().categorias.find(
+    c => c.nombre.toLowerCase() === nombre.toLowerCase()
+  ) || null;
 }
 
 function crearCategoria(nombre, descripcion, max_equipos) {
@@ -172,7 +75,7 @@ function crearCategoria(nombre, descripcion, max_equipos) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '_');
 
-  if (datos.categorias.find((c) => c.id === id || c.nombre.toLowerCase() === nombre.toLowerCase())) {
+  if (datos.categorias.find(c => c.id === id || c.nombre.toLowerCase() === nombre.toLowerCase())) {
     return { ok: false, error: 'Ya existe una categoría con ese nombre.' };
   }
 
@@ -184,7 +87,7 @@ function crearCategoria(nombre, descripcion, max_equipos) {
 
 function editarCategoria(id, campos) {
   const datos = leerDatos();
-  const idx = datos.categorias.findIndex((c) => c.id === id);
+  const idx = datos.categorias.findIndex(c => c.id === id);
   if (idx === -1) return { ok: false, error: 'Categoría no encontrada.' };
   datos.categorias[idx] = { ...datos.categorias[idx], ...campos };
   guardarDatos(datos);
@@ -193,10 +96,10 @@ function editarCategoria(id, campos) {
 
 function eliminarCategoria(id) {
   const datos = leerDatos();
-  const idx = datos.categorias.findIndex((c) => c.id === id);
+  const idx = datos.categorias.findIndex(c => c.id === id);
   if (idx === -1) return { ok: false, error: 'Categoría no encontrada.' };
 
-  const equipos = datos.equipos.filter((e) => e.categoria_id === id);
+  const equipos = datos.equipos.filter(e => e.categoria_id === id);
   if (equipos.length > 0) {
     return {
       ok: false,
@@ -209,168 +112,43 @@ function eliminarCategoria(id) {
   return { ok: true };
 }
 
+// ── Equipos ────────────────────────────────────────────────────────────────
+
 function obtenerEquipos() {
-  return leerDatos().equipos;
+  return leerDatos().equipos || [];
 }
 
 function obtenerEquipoPorId(id) {
-  return leerDatos().equipos.find((e) => e.id === id) || null;
+  if (!id) return null;
+  return leerDatos().equipos.find(e => e.id === id) || null;
 }
 
 function obtenerEquiposPorCategoria(categoria_id) {
-  return leerDatos().equipos.filter((e) => e.categoria_id === categoria_id);
+  return leerDatos().equipos.filter(e => e.categoria_id === categoria_id);
 }
 
 function obtenerEquipoPorNombre(nombre) {
-  return leerDatos().equipos.find((e) => e.nombre.toLowerCase() === nombre.toLowerCase()) || null;
+  if (!nombre) return null;
+  return leerDatos().equipos.find(
+    e => e.nombre.toLowerCase() === nombre.toLowerCase()
+  ) || null;
 }
 
 function obtenerEquipoPorAbreviacion(abreviacion) {
-  return leerDatos().equipos.find((e) => e.abreviacion?.toLowerCase() === abreviacion.toLowerCase()) || null;
+  if (!abreviacion) return null;
+  return leerDatos().equipos.find(
+    e => e.abreviacion?.toLowerCase() === abreviacion.toLowerCase()
+  ) || null;
 }
 
+/**
+ * Busca qué equipo contiene a un jugador.
+ * Ahora usa SQLite en vez de iterar plantillas JSON.
+ */
 function obtenerEquipoPorJugador(userId) {
-  const plantillas = leerFichajes().plantillas.filter((p) =>
-    p.miembros?.some((m) => mismoId(m.discord_user_id, userId))
-  );
-  if (plantillas.length === 0) return null;
-  return obtenerEquipoPorId(plantillas[0].team_id);
-}
-
-function obtenerMiembro(userId) {
-  const plantillas = leerFichajes().plantillas.filter((p) =>
-    p.miembros?.some((m) => mismoId(m.discord_user_id, userId))
-  );
-  if (plantillas.length === 0) return null;
-  if (plantillas.length !== 1) {
-    return { inconsistent: true, teams: plantillas.map((p) => obtenerEquipoPorId(p.team_id)).filter(Boolean) };
-  }
-  const plantilla = plantillas[0];
-  const record = plantilla.miembros.find((m) => mismoId(m.discord_user_id, userId));
-  return {
-    team_id: plantilla.team_id,
-    discord_user_id: String(userId),
-    role: record.role,
-    haxball_nick: record.haxball_nick || null,
-    joined_at: record.joined_at || null,
-  };
-}
-
-function registrarMiembro(teamId, userId, role, haxballNick = null, performedBy = null) {
-  const fichajes = leerFichajes();
-  const plantilla = fichajes.plantillas.find((p) => p.team_id === teamId);
-  if (!plantilla) throw new Error(`Equipo inexistente: ${teamId}`);
-
-  const ocupado = fichajes.plantillas.find((p) =>
-    p.team_id !== teamId && p.miembros.some((m) => mismoId(m.discord_user_id, userId))
-  );
-  if (ocupado) throw new Error(`Usuario ${userId} ya pertenece a ${ocupado.team_id}`);
-
-  const old = plantilla.miembros.find((m) => mismoId(m.discord_user_id, userId));
-  const member = {
-    discord_user_id: String(userId),
-    role,
-    haxball_nick: haxballNick ?? old?.haxball_nick ?? null,
-    joined_at: old?.joined_at || new Date().toISOString(),
-  };
-  plantilla.miembros = plantilla.miembros.filter((m) => !mismoId(m.discord_user_id, userId)).concat(member);
-
-  if (performedBy) {
-    fichajes.fichados.push({
-      user_id: String(userId),
-      team_id: teamId,
-      team_nombre: plantilla.nombre,
-      role,
-      haxball_nick: member.haxball_nick,
-      performed_by: performedBy,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  guardarFichajes(fichajes);
-  sincronizarEquipoDesdePlantilla(teamId);
-  return { team_id: teamId, ...member };
-}
-
-function quitarMiembro(teamId, userId, action, performedBy) {
-  const fichajes = leerFichajes();
-  const plantilla = fichajes.plantillas.find((p) => p.team_id === teamId);
-  if (!plantilla) throw new Error(`Equipo inexistente: ${teamId}`);
-
-  const member = plantilla.miembros.find((m) => mismoId(m.discord_user_id, userId));
-  const role = member?.role || null;
-  plantilla.miembros = plantilla.miembros.filter((m) => !mismoId(m.discord_user_id, userId));
-
-  fichajes.bajas.push({
-    user_id: String(userId),
-    team_id: teamId,
-    team_nombre: plantilla.nombre,
-    role,
-    motivo: action,
-    haxball_nick: member?.haxball_nick || null,
-    performed_by: performedBy,
-    timestamp: new Date().toISOString(),
-  });
-
-  guardarFichajes(fichajes);
-  sincronizarEquipoDesdePlantilla(teamId);
-  return { role, member };
-}
-
-function asignarSubDt(teamId, userId, performedBy) {
-  const fichajes = leerFichajes();
-  const plantilla = fichajes.plantillas.find((p) => p.team_id === teamId);
-  if (!plantilla) throw new Error(`Equipo inexistente: ${teamId}`);
-  if (plantilla.miembros.some((m) => m.role === 'SUB_DT')) {
-    throw new Error('El equipo ya tiene Sub-Director Técnico.');
-  }
-  const member = plantilla.miembros.find((m) => mismoId(m.discord_user_id, userId));
-  if (!member) throw new Error('El usuario no pertenece a la plantilla.');
-  member.role = 'SUB_DT';
-  guardarFichajes(fichajes);
-  sincronizarEquipoDesdePlantilla(teamId);
-  return member;
-}
-
-function quitarSubDt(teamId, userId, performedBy) {
-  const fichajes = leerFichajes();
-  const plantilla = fichajes.plantillas.find((p) => p.team_id === teamId);
-  if (!plantilla) throw new Error(`Equipo inexistente: ${teamId}`);
-  const member = plantilla.miembros.find((m) => mismoId(m.discord_user_id, userId));
-  if (!member || member.role !== 'SUB_DT') throw new Error('El usuario no es Sub-Director Técnico.');
-  member.role = 'PLAYER';
-  guardarFichajes(fichajes);
-  sincronizarEquipoDesdePlantilla(teamId);
-  return member;
-}
-
-function crearPropuesta(datos) {
-  const fichajes = leerFichajes();
-  const propuesta = { ...datos, status: datos.status || 'PENDING' };
-  fichajes.propuestas.push(propuesta);
-  guardarFichajes(fichajes);
-  return propuesta;
-}
-
-function obtenerPropuesta(id) {
-  return leerFichajes().propuestas.find((p) => p.id === id) || null;
-}
-
-function actualizarPropuesta(id, campos) {
-  const fichajes = leerFichajes();
-  const idx = fichajes.propuestas.findIndex((p) => p.id === id);
-  if (idx === -1) return null;
-  fichajes.propuestas[idx] = { ...fichajes.propuestas[idx], ...campos };
-  guardarFichajes(fichajes);
-  return fichajes.propuestas[idx];
-}
-
-function agregarHistorial(entry) {
-  const fichajes = leerFichajes();
-  const item = { ...entry, timestamp: entry.timestamp || new Date().toISOString() };
-  if (entry.action === 'SIGNED') fichajes.fichados.push(item);
-  else fichajes.bajas.push(item);
-  guardarFichajes(fichajes);
+  const miembro = sqlite.obtenerMiembroDb(userId);
+  if (!miembro || miembro.inconsistent) return null;
+  return obtenerEquipoPorId(miembro.team_id);
 }
 
 function crearEquipo(datos_equipo) {
@@ -381,48 +159,40 @@ function crearEquipo(datos_equipo) {
   datos.equipos.push(equipo);
   guardarDatos(datos);
 
-  const fichajes = leerFichajes();
-  const plantilla = construirPlantillaDesdeEquipo(equipo);
-  fichajes.plantillas = fichajes.plantillas.filter((p) => p.team_id !== id).concat(plantilla);
-  guardarFichajes(fichajes);
-  sincronizarEquipoDesdePlantilla(id);
+  // Registrar DT, SUB_DT y jugadores en SQLite
+  _sincronizarEquipoASqlite(equipo);
+
   return obtenerEquipoPorId(id);
 }
 
 function actualizarEquipo(id, campos) {
   const datos = leerDatos();
-  const idx = datos.equipos.findIndex((e) => e.id === id);
+  const idx = datos.equipos.findIndex(e => e.id === id);
   if (idx === -1) return null;
   datos.equipos[idx] = { ...datos.equipos[idx], ...campos, updated_at: new Date().toISOString() };
   guardarDatos(datos);
-  if (campos.nombre) {
-    const fichajes = leerFichajes();
-    const plantilla = fichajes.plantillas.find((p) => p.team_id === id);
-    if (plantilla) {
-      plantilla.nombre = campos.nombre;
-      guardarFichajes(fichajes);
-    }
-  }
   return datos.equipos[idx];
 }
 
 function eliminarEquipoPorId(id) {
   const datos = leerDatos();
-  const idx = datos.equipos.findIndex((e) => e.id === id);
+  const idx = datos.equipos.findIndex(e => e.id === id);
   if (idx === -1) return false;
   datos.equipos.splice(idx, 1);
   guardarDatos(datos);
 
-  const fichajes = leerFichajes();
-  fichajes.plantillas = fichajes.plantillas.filter((p) => p.team_id !== id);
-  fichajes.propuestas = fichajes.propuestas.map((p) =>
-    p.team_id === id && p.status === 'PENDING' ? { ...p, status: 'CANCELLED' } : p
-  );
-  guardarFichajes(fichajes);
+  // Limpiar SQLite: cancelar propuestas pendientes y eliminar miembros
+  sqlite.eliminarMiembrosEquipoDb(id);
+
+  const db = sqlite.getDb();
+  db.prepare("UPDATE proposals SET status = 'CANCELLED', resolved_at = datetime('now') WHERE team_id = ? AND status = 'PENDING'")
+    .run(id);
+
   return true;
 }
 
 function cuposDisponibles(categoria) {
+  if (!categoria) return 0;
   return categoria.max_equipos - obtenerEquiposPorCategoria(categoria.id).length;
 }
 
@@ -430,8 +200,152 @@ function categoriaLlena(categoria) {
   return cuposDisponibles(categoria) <= 0;
 }
 
+/**
+ * Sincroniza un equipo recién creado a las tablas de SQLite.
+ * Se llama al crear un equipo para poblar la tabla `members`.
+ */
+function _sincronizarEquipoASqlite(equipo) {
+  const db = sqlite.getDb();
+  const insertMember = db.prepare(`
+    INSERT OR IGNORE INTO members (team_id, discord_user_id, role, haxball_nick, joined_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+  `);
+
+  const added = new Set();
+
+  const agregar = (userId, role, haxballNick = null) => {
+    if (!userId || added.has(userId)) return;
+    added.add(userId);
+    insertMember.run(equipo.id, userId, role, haxballNick);
+  };
+
+  agregar(equipo.director_tecnico_id, 'DT');
+  agregar(equipo.sub_director_tecnico_id, 'SUB_DT');
+  for (const id of equipo.jugadores || []) agregar(id, 'PLAYER');
+  for (const m of equipo.members || []) agregar(m.discord_user_id, m.role || 'PLAYER', m.haxball_nick);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SQLite – Plantillas / Fichajes / Propuestas (API compatible)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Obtiene la plantilla de un equipo.
+ */
+function obtenerPlantilla(teamId) {
+  const plantilla = sqlite.obtenerPlantillaDb(teamId);
+  if (!plantilla || plantilla.miembros.length === 0) return null;
+  const equipo = obtenerEquipoPorId(teamId);
+  return {
+    ...plantilla,
+    nombre: equipo?.nombre || null,
+  };
+}
+
+/**
+ * Busca el registro de un miembro.
+ * Devuelve null, { inconsistent: true, teams: [...] } o el registro.
+ */
+function obtenerMiembro(userId) {
+  const result = sqlite.obtenerMiembroDb(userId);
+  if (!result) return null;
+  if (result.inconsistent) {
+    return {
+      inconsistent: true,
+      teams: result.teams.map(tid => obtenerEquipoPorId(tid)).filter(Boolean),
+    };
+  }
+  return result;
+}
+
+/**
+ * Registra un miembro en un equipo.
+ */
+function registrarMiembro(teamId, userId, role, haxballNick = null, performedBy = null) {
+  return sqlite.registrarMiembroDb(teamId, userId, role, haxballNick, performedBy);
+}
+
+/**
+ * Quita a un miembro de su equipo.
+ */
+function quitarMiembro(teamId, userId, action, performedBy) {
+  return sqlite.quitarMiembroDb(teamId, userId, action, performedBy);
+}
+
+/**
+ * Asigna el cargo de Sub-DT.
+ */
+function asignarSubDt(teamId, userId, performedBy) {
+  return sqlite.asignarSubDtDb(teamId, userId, performedBy);
+}
+
+/**
+ * Quita el cargo de Sub-DT.
+ */
+function quitarSubDt(teamId, userId, performedBy) {
+  return sqlite.quitarSubDtDb(teamId, userId, performedBy);
+}
+
+// ── Propuestas ─────────────────────────────────────────────────────────────
+
+function crearPropuesta(datos) {
+  return sqlite.crearPropuestaDb(datos);
+}
+
+function obtenerPropuesta(id) {
+  return sqlite.obtenerPropuestaDb(id);
+}
+
+function actualizarPropuesta(id, campos) {
+  return sqlite.actualizarPropuestaDb(id, campos);
+}
+
+function agregarHistorial(entry) {
+  if (entry.action === 'SIGNED') {
+    sqlite.registrarFichajeDb(
+      entry.user_id, entry.team_id, entry.team_nombre || null,
+      entry.role || 'PLAYER', entry.haxball_nick || null, entry.performed_by || null
+    );
+  } else {
+    const motivo = ['RELEASED', 'RESIGNED', 'LEFT_SERVER', 'TEAM_DELETED'].includes(entry.action)
+      ? entry.action
+      : 'RELEASED';
+    sqlite.registrarBajaDb(
+      entry.user_id, entry.team_id, entry.team_nombre || null,
+      entry.role || null, motivo, entry.haxball_nick || null, entry.performed_by || null
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Solicitudes de inscripción (se mantiene en JSON por simplicidad)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function leerSolicitudes() {
+  try {
+    if (!fs.existsSync(SOL_PATH)) {
+      const inicial = { solicitudes: [] };
+      fs.writeFileSync(SOL_PATH, JSON.stringify(inicial, null, 2), 'utf-8');
+      return inicial;
+    }
+    return JSON.parse(fs.readFileSync(SOL_PATH, 'utf-8'));
+  } catch (err) {
+    console.error('[DB] Error leyendo solicitudes.json:', err.message);
+    return { solicitudes: [] };
+  }
+}
+
+function guardarSolicitudes(datos) {
+  try {
+    fs.writeFileSync(SOL_PATH, JSON.stringify(datos, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[DB] Error guardando solicitudes.json:', err.message);
+    throw err;
+  }
+}
+
 function obtenerSolicitudPorId(id) {
-  return leerSolicitudes().solicitudes.find((s) => s.id === id) || null;
+  return leerSolicitudes().solicitudes.find(s => s.id === id) || null;
 }
 
 function crearSolicitud(datos) {
@@ -455,7 +369,7 @@ function crearSolicitud(datos) {
 
 function actualizarSolicitud(id, campos) {
   const sol = leerSolicitudes();
-  const idx = sol.solicitudes.findIndex((s) => s.id === id);
+  const idx = sol.solicitudes.findIndex(s => s.id === id);
   if (idx === -1) return null;
   sol.solicitudes[idx] = { ...sol.solicitudes[idx], ...campos };
   guardarSolicitudes(sol);
@@ -463,43 +377,62 @@ function actualizarSolicitud(id, campos) {
 }
 
 function solicitudPendientePorNombre(nombre) {
+  if (!nombre) return null;
   return (
     leerSolicitudes().solicitudes.find(
-      (s) => s.team_name.toLowerCase() === nombre.toLowerCase() && s.status === 'PENDING'
+      s => s.team_name.toLowerCase() === nombre.toLowerCase() && s.status === 'PENDING'
     ) || null
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Inicialización – migración automática
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Ejecutar migración al primer require
+sqlite.migrarDesdeJson();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Exportaciones
+// ═══════════════════════════════════════════════════════════════════════════
+
 module.exports = {
+  // JSON
   leerDatos,
   guardarDatos,
+  // Categorías
   obtenerCategorias,
   obtenerCategoriaPorId,
   obtenerCategoriaPorNombre,
   crearCategoria,
   editarCategoria,
   eliminarCategoria,
+  // Equipos
   obtenerEquipos,
   obtenerEquipoPorId,
   obtenerEquiposPorCategoria,
   obtenerEquipoPorNombre,
   obtenerEquipoPorAbreviacion,
   obtenerEquipoPorJugador,
+  // Plantillas / Miembros (SQLite)
   obtenerPlantilla,
   obtenerMiembro,
   registrarMiembro,
   quitarMiembro,
   asignarSubDt,
   quitarSubDt,
+  // Propuestas (SQLite)
   crearPropuesta,
   obtenerPropuesta,
   actualizarPropuesta,
   agregarHistorial,
+  // Equipos CRUD
   crearEquipo,
   actualizarEquipo,
   eliminarEquipoPorId,
   cuposDisponibles,
   categoriaLlena,
+  // Solicitudes (JSON)
   obtenerSolicitudPorId,
   crearSolicitud,
   actualizarSolicitud,

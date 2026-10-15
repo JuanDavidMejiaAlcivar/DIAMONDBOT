@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const fs = require('node:fs');
 const path = require('node:path');
 const db = require('../utils/db');
+const sqlite = require('../utils/database');
 
 // IDs de los únicos usuarios autorizados para usar este comando
 const AUTHORIZED_USERS = ['1506006863290957937', '1166181119113302036'];
@@ -52,7 +53,8 @@ async function limpiarDiscord(guild) {
   try {
     // Leer equipos antes de eliminar la base de datos
     const equipos = db.obtenerEquipos();
-    const plantillas = db.leerFichajes().plantillas;
+    // Obtener plantillas de cada equipo desde SQLite
+    const plantillas = equipos.map(eq => db.obtenerPlantilla(eq.id)).filter(Boolean);
 
     // 1. Eliminar roles y canales de equipos
     for (const equipo of equipos) {
@@ -145,16 +147,10 @@ function resetearBaseDatos() {
   const estructura = crearEstructuraInicial();
   
   try {
-    // Resetear cada archivo
+    // Resetear archivos JSON
     fs.writeFileSync(
       path.join(DATA_DIR, 'categorias.json'),
       JSON.stringify(estructura.categorias, null, 2),
-      'utf-8'
-    );
-    
-    fs.writeFileSync(
-      path.join(DATA_DIR, 'fichajes.json'),
-      JSON.stringify(estructura.fichajes, null, 2),
       'utf-8'
     );
     
@@ -175,6 +171,18 @@ function resetearBaseDatos() {
       JSON.stringify(estructura.antiraid, null, 2),
       'utf-8'
     );
+
+    // Resetear tablas SQLite (fichajes, propuestas, miembros, historial)
+    try {
+      const sqlDb = sqlite.getDb();
+      sqlDb.exec('DELETE FROM members');
+      sqlDb.exec('DELETE FROM proposals');
+      sqlDb.exec('DELETE FROM signings');
+      sqlDb.exec('DELETE FROM releases');
+      console.log('[RESET-BOT] Tablas SQLite limpiadas correctamente.');
+    } catch (sqlErr) {
+      console.error('[RESET-BOT] Error limpiando SQLite:', sqlErr.message);
+    }
     
     return { success: true };
   } catch (error) {

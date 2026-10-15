@@ -1,4 +1,4 @@
-﻿const {
+const {
   SlashCommandBuilder,
   EmbedBuilder,
 } = require('discord.js');
@@ -31,8 +31,9 @@ module.exports = {
       });
     }
 
-    const { team_id, role } = operator;
-    const team = db.obtenerEquipoPorId(team_id);
+    const { member: operatorRecord, team } = operator;
+    const team_id = operatorRecord.team_id;
+    const role = operatorRecord.role;
 
     if (!team) {
       return interaction.editReply({
