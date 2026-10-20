@@ -237,12 +237,13 @@ module.exports = {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    const response = await interaction.reply({
+    const { resource } = await interaction.reply({
       embeds: [warningEmbed],
       components: [row],
       ephemeral: true,
-      fetchReply: true
+      withResponse: true,
     });
+    const response = resource.message;
 
     // Crear collector para los botones
     const collector = response.createMessageComponentCollector({

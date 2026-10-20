@@ -1,11 +1,11 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { isAdmin, noPermissionEmbed, COMMAND_CHANNELS, checkChannel } = require('../utils/permissions');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('tickets')
     .setDescription('Despliega el panel de tickets')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  ,
 
   async execute(interaction) {
     // Verificar permisos administrativos

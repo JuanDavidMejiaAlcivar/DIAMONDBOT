@@ -35,6 +35,9 @@ async function handleButton(interaction, client) {
   const id = interaction.customId;
   console.log('[BUTTON] Botón detectado:', id);
 
+  // Botones de paginación — son manejados por collectors locales en cada comando
+  if (id === 'prev_cat' || id === 'next_cat' || id === 'prev_equipo' || id === 'next_equipo') return;
+
   try {
     // ═══════════════════════════════════════════════════════════════════════
     // SISTEMA DE TICKETS

@@ -70,11 +70,12 @@ module.exports = {
       );
     };
 
-    await interaction.reply({
+    const { resource } = await interaction.reply({
       embeds: [generateEmbed(currentIndex)],
       components: categorias.length > 1 ? [generateButtons(currentIndex)] : [],
+      withResponse: true,
     });
-    const message = await interaction.fetchReply();
+    const message = resource.message;
 
     if (categorias.length > 1) {
       const collector = message.createMessageComponentCollector({

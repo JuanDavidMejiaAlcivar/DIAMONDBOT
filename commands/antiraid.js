@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { isAdmin, noPermissionEmbed } = require('../utils/permissions');
 const { activarAntiraid, estaActivo } = require('../utils/antiraid');
 
@@ -14,7 +14,7 @@ module.exports = {
         .setMinValue(0)
         .setMaxValue(21600)
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  ,
 
   async execute(interaction) {
     // Verificar permisos administrativos

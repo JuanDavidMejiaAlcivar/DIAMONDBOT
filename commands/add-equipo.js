@@ -19,7 +19,6 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('add-equipo')
     .setDescription('[ADMIN] Registra un nuevo equipo directamente en Diamonds League')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((opt) =>
       opt.setName('nombreequipo').setDescription('Nombre completo del equipo').setRequired(true).setMaxLength(100)
     )

@@ -1,7 +1,6 @@
 const {
   SlashCommandBuilder,
   EmbedBuilder,
-  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -13,7 +12,6 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('edit-categorias')
     .setDescription('[ADMIN] Gestiona las categorías de Diamonds League')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName('crear')

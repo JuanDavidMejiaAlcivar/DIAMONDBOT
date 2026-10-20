@@ -15,7 +15,6 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('eliminate-equipo')
     .setDescription('[ADMIN] Elimina permanentemente un equipo de la liga')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((opt) =>
       opt
         .setName('equipo')

@@ -6,10 +6,11 @@ module.exports = {
     .setDescription('🏓 Muestra la latencia del bot y de la API de Discord'),
 
   async execute(interaction) {
-    await interaction.reply({
+    const { resource } = await interaction.reply({
       content: '🏓 Calculando ping...',
+      withResponse: true,
     });
-    const sent = await interaction.fetchReply();
+    const sent = resource.message;
 
     const roundTrip = sent.createdTimestamp - interaction.createdTimestamp;
 

@@ -248,11 +248,12 @@ module.exports = {
     const selectMenu = createSelectMenu('home');
     const buttons = createButtonRow(interaction.id, interaction.user.id);
 
-    const response = await interaction.reply({
+    const { resource } = await interaction.reply({
       embeds: [embed],
       components: [selectMenu, buttons],
-      fetchReply: true
+      withResponse: true,
     });
+    const response = resource.message;
 
     // Crear collector para el select menu
     const selectCollector = response.createMessageComponentCollector({

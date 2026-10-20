@@ -34,7 +34,6 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('edit-equipo')
     .setDescription('[ADMIN] Edita la información de un equipo registrado')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((opt) =>
       opt
         .setName('equipo')

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { isAdmin, noPermissionEmbed } = require('../utils/permissions');
 const { desactivarAntiraid, estaActivo, leerEstadoAntiraid } = require('../utils/antiraid');
 
@@ -6,7 +6,7 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('q-antiraid')
     .setDescription('[ADMIN] Desactiva el modo antiraid y restaura la normalidad del servidor')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  ,
 
   async execute(interaction) {
     // Verificar permisos administrativos

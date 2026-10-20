@@ -1,5 +1,18 @@
 {
-  "categorias": [],
+  "categorias": [
+    {
+      "id": "diamonds_league_d1",
+      "nombre": "Diamonds League D1",
+      "descripcion": "Primera Division",
+      "max_equipos": 12
+    },
+    {
+      "id": "diamonds_league_d2",
+      "nombre": "Diamonds League D2",
+      "descripcion": "Segunda Division",
+      "max_equipos": 8
+    }
+  ],
   "equipos": [],
   "transferHistory": []
 }
