@@ -16,6 +16,7 @@ const {
   Collection,
   GatewayIntentBits,
   EmbedBuilder,
+  Partials,
 } = require('discord.js');
 const fs   = require('node:fs');
 const path = require('node:path');
@@ -31,6 +32,9 @@ const { handleButton } = require('./handlers/buttonHandler');
 const { handleModal }  = require('./handlers/modalHandler');
 const { safeReply }    = require('./handlers/safeReply');
 
+// ── Autoroles ─────────────────────────────────────────────────────────────
+const autoroles = require('./utils/autorolesManager');
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Cliente de Discord
 // ═══════════════════════════════════════════════════════════════════════════
@@ -41,6 +45,12 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions, // ← necesario para autoroles
+  ],
+  partials: [
+    Partials.Message,   // reacciones en mensajes viejos (bot reiniciado)
+    Partials.Channel,
+    Partials.Reaction,
   ],
 });
 
@@ -239,6 +249,59 @@ async function _handleAntiraidAction(message, kickReason, expelTitle, warnTitle)
     console.error('[ANTIRAID] Error procesando acción:', error.message);
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sistema de Autoroles – Asignación y retirada de roles por reacción
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Manejo centralizado de reacciones para autoroles.
+ * @param {import('discord.js').MessageReaction} reaction
+ * @param {import('discord.js').User} user
+ * @param {'add'|'remove'} action
+ */
+async function _handleAutorolReaction(reaction, user, action) {
+  if (user.bot) return;
+
+  // Resolver partials (mensaje viejo / bot reiniciado)
+  try {
+    if (reaction.partial)         await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+  } catch (err) {
+    console.error('[AUTOROLES] Error resolviendo partial:', err.message);
+    return;
+  }
+
+  const config = autoroles.obtenerAutorolesPorMensaje(reaction.message.id);
+  if (!config) return;
+
+  const entry = autoroles.encontrarEntradaPorEmoji(config, reaction);
+  if (!entry) return;
+
+  try {
+    const guild  = reaction.message.guild;
+    const member = await guild.members.fetch(user.id).catch(() => null);
+    if (!member) return;
+
+    if (action === 'add') {
+      await member.roles.add(entry.role_id);
+      console.log(`[AUTOROLES] Rol <@&${entry.role_id}> asignado a ${user.tag}`);
+    } else {
+      await member.roles.remove(entry.role_id);
+      console.log(`[AUTOROLES] Rol <@&${entry.role_id}> retirado de ${user.tag}`);
+    }
+  } catch (err) {
+    console.error(`[AUTOROLES] Error al ${action === 'add' ? 'asignar' : 'retirar'} rol:`, err.message);
+  }
+}
+
+client.on('messageReactionAdd', (reaction, user) =>
+  _handleAutorolReaction(reaction, user, 'add')
+);
+
+client.on('messageReactionRemove', (reaction, user) =>
+  _handleAutorolReaction(reaction, user, 'remove')
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Login
