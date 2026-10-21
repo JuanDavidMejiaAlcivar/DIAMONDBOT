@@ -5,7 +5,13 @@
  * El bot reacciona con los emojis configurados; los usuarios reaccionan para
  * obtener el rol correspondiente y quitan la reacción para eliminarlo.
  *
- * Soporta hasta 5 pares (rol, emoji, descripción) por panel.
+ * Soporta hasta 10 roles por panel.
+ * Formato del campo "config": "emoji | descripción"  (separador "|")
+ * Ejemplo: "🎮 | Para jugadores activos de la liga"
+ *
+ * Discord permite máximo 25 opciones por comando.
+ * 10 roles × 2 campos (rol + config) = 20 opciones → dentro del límite.
+ *
  * Se pueden tener múltiples paneles activos en distintos canales.
  */
 
@@ -20,27 +26,29 @@ const { guardarAutoroles, parseEmoji } = require('../utils/autorolesManager');
 
 const builder = new SlashCommandBuilder()
   .setName('desplegar-autoroles')
-  .setDescription('[ADMIN] Despliega un panel de autoroles con reacciones de emojis');
+  .setDescription('[ADMIN] Despliega un panel de autoroles con reacciones de emojis (hasta 10 roles)');
 
-// Opciones para hasta 5 roles
-for (let i = 1; i <= 5; i++) {
-  const req = i === 1; // Solo el primero es obligatorio
+/**
+ * Añade las opciones para cada slot de rol.
+ * Cada slot tiene:
+ *   - rolN   → opción de rol de Discord
+ *   - configN → string con formato "emoji | descripción"
+ */
+for (let i = 1; i <= 10; i++) {
+  const req = i === 1; // Solo el primer slot es obligatorio
   builder
     .addRoleOption(opt =>
-      opt.setName(`rol${i}`)
+      opt
+        .setName(`rol${i}`)
         .setDescription(`Rol ${i} a asignar`)
         .setRequired(req)
     )
     .addStringOption(opt =>
-      opt.setName(`emoji${i}`)
-        .setDescription(`Emoji para el rol ${i} (Unicode o <:nombre:id>)`)
+      opt
+        .setName(`config${i}`)
+        .setDescription(`Rol ${i}: "emoji | descripción"  Ej: 🎮 | Para jugadores activos`)
         .setRequired(req)
-    )
-    .addStringOption(opt =>
-      opt.setName(`descripcion${i}`)
-        .setDescription(`Descripción del rol ${i}`)
-        .setRequired(req)
-        .setMaxLength(120)
+        .setMaxLength(150)
     );
 }
 
@@ -55,30 +63,57 @@ module.exports = {
       return interaction.reply({ embeds: [noPermissionEmbed()], ephemeral: true });
     }
 
-    // ── Recolectar entradas ──────────────────────────────────────────────
-    const entries = [];
+    // ── Recolectar y validar entradas ────────────────────────────────────
+    const entries  = [];
+    const errores  = [];
 
-    for (let i = 1; i <= 5; i++) {
-      const rol        = interaction.options.getRole(`rol${i}`);
-      const emojiStr   = interaction.options.getString(`emoji${i}`);
-      const descripcion = interaction.options.getString(`descripcion${i}`);
+    for (let i = 1; i <= 10; i++) {
+      const rol       = interaction.options.getRole(`rol${i}`);
+      const configStr = interaction.options.getString(`config${i}`);
 
-      if (!rol || !emojiStr || !descripcion) continue;
+      if (!rol || !configStr) continue;
+
+      // Parsear "emoji | descripción"
+      const separatorIdx = configStr.indexOf('|');
+      if (separatorIdx === -1) {
+        errores.push(`rol${i}: falta el separador "|" en el campo config.`);
+        continue;
+      }
+
+      const emoji       = configStr.slice(0, separatorIdx).trim();
+      const descripcion = configStr.slice(separatorIdx + 1).trim();
+
+      if (!emoji) {
+        errores.push(`rol${i}: el emoji no puede estar vacío.`);
+        continue;
+      }
+      if (!descripcion) {
+        errores.push(`rol${i}: la descripción no puede estar vacía.`);
+        continue;
+      }
 
       entries.push({
         role_id:     rol.id,
         role_name:   rol.name,
-        emoji:       emojiStr.trim(),
-        descripcion: descripcion.trim(),
+        emoji,
+        descripcion,
       });
     }
 
     if (entries.length === 0) {
       return interaction.reply({
-        content: '❌ Debes configurar al menos un rol con su emoji y descripción.',
+        content:
+          '❌ Debes configurar al menos un rol.\n' +
+          'Formato del campo config: `emoji | descripción`\n' +
+          'Ejemplo: `🎮 | Para jugadores activos`',
         ephemeral: true,
       });
     }
+
+    // Advertir sobre entradas con error de formato pero continuar con las válidas
+    const formatoError = errores.length > 0
+      ? `\n\n⚠️ **Entradas ignoradas por formato incorrecto:**\n${errores.map(e => `· ${e}`).join('\n')}`
+      : '';
 
     // ── Construir embed del panel ────────────────────────────────────────
     const descripcionRoles = entries
@@ -98,7 +133,7 @@ module.exports = {
       .setFooter({ text: 'Diamonds League · Sistema de Autoroles' })
       .setTimestamp();
 
-    // ── Diferir la respuesta (por si tarda en reaccionar) ───────────────
+    // ── Diferir la respuesta (el bot puede tardar al reaccionar) ─────────
     await interaction.deferReply({ ephemeral: true });
 
     // ── Enviar el panel al canal ─────────────────────────────────────────
@@ -135,15 +170,16 @@ module.exports = {
     });
 
     // ── Responder al admin ───────────────────────────────────────────────
-    const advertencia = emojisFallidos.length > 0
-      ? `\n\n⚠️ Los siguientes emojis no pudieron añadirse como reacción (¿están en este servidor?): ${emojisFallidos.join(', ')}`
+    const emojiError = emojisFallidos.length > 0
+      ? `\n\n⚠️ Emojis que no pudieron reaccionar (¿son de este servidor?): ${emojisFallidos.join(', ')}`
       : '';
 
     await interaction.editReply({
       content:
         `✅ **Panel de autoroles desplegado** en ${interaction.channel}.\n` +
         `Se configuraron **${entries.length}** rol(es).` +
-        advertencia,
+        emojiError +
+        formatoError,
     });
   },
 };
